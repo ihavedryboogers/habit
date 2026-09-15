@@ -12,12 +12,8 @@ jobs:
   build:
     strategy:
       matrix:
-        include:
-          - os: macos-14
-            rid: osx-arm64
-          - os: macos-13
-            rid: osx-x64
-    runs-on: ${{ matrix.os }}
+        rid: [osx-arm64, osx-x64]
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
 
