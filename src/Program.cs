@@ -5,7 +5,10 @@ var today = DateOnly.FromDateTime(DateTime.Now);
 
 if (args.Length == 0)
 {
-    Commands.List(store, today);
+    if (Interactive.CanRun())
+        Interactive.Run(store);
+    else
+        Commands.List(store, today);
     return 0;
 }
 
