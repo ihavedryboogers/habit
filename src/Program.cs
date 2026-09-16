@@ -27,6 +27,10 @@ try
             Commands.Done(store, today, RequireArg(rest, 0, "название привычки"), OptionalDate(rest, 1, today));
             break;
 
+        case "fail":
+            Commands.Fail(store, RequireArg(rest, 0, "название привычки"), OptionalDate(rest, 1, today));
+            break;
+
         case "undone":
             Commands.Undone(store, RequireArg(rest, 0, "название привычки"), OptionalDate(rest, 1, today));
             break;

@@ -2,191 +2,347 @@ namespace Habit;
 
 public static class Interactive
 {
-    private const int Days = 7;
-
     public static bool CanRun() => !Console.IsInputRedirected && !Console.IsOutputRedirected;
 
-    public static void Run(Store store)
+    public static void Run(Store store) => new Session(store).Run();
+
+    private sealed class Session
     {
-        var row = 0;
-        var col = Days - 1;
+        private const int MinDays = 1;
+        private const int MaxDays = 60;
 
-        Console.CursorVisible = false;
-        try
+        private readonly Store _store;
+        private int _row;
+        private int _col;
+        private int _dayCount = 7;
+        private bool _colorEnabled = true;
+        private bool _moveMode;
+        private bool _blinkOn;
+        private int _prevLineCount;
+
+        public Session(Store store) => _store = store;
+
+        public void Run()
         {
-            while (true)
+            Console.Clear();
+            Console.CursorVisible = false;
+            try
             {
-                var today = DateOnly.FromDateTime(DateTime.Now);
-                var habits = store.Data.Habits;
-
-                if (habits.Count > 0)
+                Render();
+                while (true)
                 {
-                    row = Math.Clamp(row, 0, habits.Count - 1);
-                    col = Math.Clamp(col, 0, Days - 1);
-                }
+                    var key = WaitForKey(_moveMode ? 400 : (int?)null);
+                    if (key is null)
+                    {
+                        _blinkOn = !_blinkOn;
+                        Render();
+                        continue;
+                    }
 
-                Draw(habits, today, row, col);
-
-                var key = Console.ReadKey(intercept: true).Key;
-                switch (key)
-                {
-                    case ConsoleKey.UpArrow:
-                        if (habits.Count > 0) row = Math.Max(0, row - 1);
-                        break;
-
-                    case ConsoleKey.DownArrow:
-                        if (habits.Count > 0) row = Math.Min(habits.Count - 1, row + 1);
-                        break;
-
-                    case ConsoleKey.LeftArrow:
-                        col = Math.Max(0, col - 1);
-                        break;
-
-                    case ConsoleKey.RightArrow:
-                        col = Math.Min(Days - 1, col + 1);
-                        break;
-
-                    case ConsoleKey.Enter:
-                        if (habits.Count > 0)
-                        {
-                            var date = today.AddDays(col - (Days - 1));
-                            Toggle(store, habits[row], date);
-                        }
-                        break;
-
-                    case ConsoleKey.A:
-                        AddHabit(store);
-                        row = store.Data.Habits.Count - 1;
-                        col = Days - 1;
-                        break;
-
-                    case ConsoleKey.D:
-                        if (habits.Count > 0)
-                            RemoveHabit(store, habits[row]);
-                        break;
-
-                    case ConsoleKey.Q:
-                    case ConsoleKey.Escape:
+                    if (!Handle(key.Value))
                         return;
+
+                    Render();
                 }
             }
+            finally
+            {
+                Console.CursorVisible = true;
+                Console.Clear();
+            }
         }
-        finally
+
+        private static ConsoleKey? WaitForKey(int? timeoutMs)
+        {
+            if (timeoutMs is null)
+                return Console.ReadKey(intercept: true).Key;
+
+            var deadline = Environment.TickCount64 + timeoutMs.Value;
+            while (Environment.TickCount64 < deadline)
+            {
+                if (Console.KeyAvailable)
+                    return Console.ReadKey(intercept: true).Key;
+                Thread.Sleep(20);
+            }
+            return null;
+        }
+
+        private bool Handle(ConsoleKey key)
+        {
+            var habits = _store.Data.Habits;
+            ClampSelection(habits);
+
+            switch (key)
+            {
+                case ConsoleKey.UpArrow:
+                    if (_moveMode) MoveHabit(-1);
+                    else if (habits.Count > 0) _row = Math.Max(0, _row - 1);
+                    break;
+
+                case ConsoleKey.DownArrow:
+                    if (_moveMode) MoveHabit(1);
+                    else if (habits.Count > 0) _row = Math.Min(habits.Count - 1, _row + 1);
+                    break;
+
+                case ConsoleKey.LeftArrow:
+                    _col = Math.Max(0, _col - 1);
+                    break;
+
+                case ConsoleKey.RightArrow:
+                    _col = Math.Min(_dayCount - 1, _col + 1);
+                    break;
+
+                case ConsoleKey.Enter:
+                    if (_moveMode) _moveMode = false;
+                    else if (habits.Count > 0) ToggleSelected();
+                    break;
+
+                case ConsoleKey.E:
+                    if (habits.Count > 0) SetSelected(DayStatus.Empty);
+                    break;
+
+                case ConsoleKey.M:
+                    if (habits.Count > 1) _moveMode = !_moveMode;
+                    break;
+
+                case ConsoleKey.T:
+                    _colorEnabled = !_colorEnabled;
+                    break;
+
+                case ConsoleKey.D:
+                    PromptDayCount();
+                    break;
+
+                case ConsoleKey.A:
+                    PromptAddHabit();
+                    break;
+
+                case ConsoleKey.Delete:
+                    if (habits.Count > 0) PromptRemoveHabit(habits[_row]);
+                    break;
+
+                case ConsoleKey.Q:
+                case ConsoleKey.Escape:
+                    return false;
+            }
+
+            return true;
+        }
+
+        private DateOnly ColumnDate(DateOnly today) => today.AddDays(_col - (_dayCount - 1));
+
+        private void ToggleSelected()
+        {
+            var today = DateOnly.FromDateTime(DateTime.Now);
+            var habit = _store.Data.Habits[_row];
+            var date = ColumnDate(today);
+            var next = Streak.Status(habit, date) == DayStatus.Done ? DayStatus.Failed : DayStatus.Done;
+            Streak.SetStatus(habit, date, next);
+            _store.Save();
+        }
+
+        private void SetSelected(DayStatus status)
+        {
+            var today = DateOnly.FromDateTime(DateTime.Now);
+            Streak.SetStatus(_store.Data.Habits[_row], ColumnDate(today), status);
+            _store.Save();
+        }
+
+        private void MoveHabit(int direction)
+        {
+            var habits = _store.Data.Habits;
+            var target = _row + direction;
+            if (target < 0 || target >= habits.Count)
+                return;
+
+            (habits[_row], habits[target]) = (habits[target], habits[_row]);
+            _row = target;
+            _store.Save();
+        }
+
+        private void ClampSelection(List<HabitEntry> habits)
+        {
+            _row = habits.Count > 0 ? Math.Clamp(_row, 0, habits.Count - 1) : 0;
+            _col = Math.Clamp(_col, 0, _dayCount - 1);
+        }
+
+        private void PromptDayCount()
+        {
+            RunPrompt($"Сколько дней показывать ({MinDays}-{MaxDays}): ", input =>
+            {
+                if (int.TryParse(input, out var value))
+                    _dayCount = Math.Clamp(value, MinDays, MaxDays);
+            });
+        }
+
+        private void PromptAddHabit()
+        {
+            RunPrompt("Название новой привычки: ", input =>
+            {
+                var name = input.Trim();
+                if (string.IsNullOrWhiteSpace(name) || _store.Find(name) is not null)
+                    return;
+
+                _store.Data.Habits.Add(new HabitEntry
+                {
+                    Name = name,
+                    CreatedAt = DateOnly.FromDateTime(DateTime.Now).ToString("yyyy-MM-dd"),
+                });
+                _store.Save();
+                _row = _store.Data.Habits.Count - 1;
+            });
+        }
+
+        private void PromptRemoveHabit(HabitEntry habit)
+        {
+            RunPrompt($"Удалить «{habit.Name}»? (y/n): ", input =>
+            {
+                if (input.Trim() is "y" or "Y")
+                {
+                    _store.Data.Habits.Remove(habit);
+                    _store.Save();
+                }
+            });
+        }
+
+        private void RunPrompt(string label, Action<string> apply)
         {
             Console.CursorVisible = true;
             Console.Clear();
-        }
-    }
-
-    private static void Toggle(Store store, HabitEntry habit, DateOnly date)
-    {
-        var dateStr = date.ToString("yyyy-MM-dd");
-        if (!habit.Dates.Remove(dateStr))
-        {
-            habit.Dates.Add(dateStr);
-            habit.Dates.Sort(StringComparer.Ordinal);
-        }
-        store.Save();
-    }
-
-    private static void AddHabit(Store store)
-    {
-        Console.CursorVisible = true;
-        Console.Clear();
-        Console.Write("Название новой привычки: ");
-        var name = Console.ReadLine()?.Trim();
-        Console.CursorVisible = false;
-
-        if (string.IsNullOrWhiteSpace(name) || store.Find(name) is not null)
-            return;
-
-        store.Data.Habits.Add(new HabitEntry
-        {
-            Name = name,
-            CreatedAt = DateOnly.FromDateTime(DateTime.Now).ToString("yyyy-MM-dd"),
-        });
-        store.Save();
-    }
-
-    private static void RemoveHabit(Store store, HabitEntry habit)
-    {
-        Console.CursorVisible = true;
-        Console.Clear();
-        Console.Write($"Удалить «{habit.Name}»? (y/n): ");
-        var confirm = Console.ReadKey(intercept: true).KeyChar;
-        Console.CursorVisible = false;
-
-        if (confirm is 'y' or 'Y')
-        {
-            store.Data.Habits.Remove(habit);
-            store.Save();
-        }
-    }
-
-    private static void Draw(List<HabitEntry> habits, DateOnly today, int row, int col)
-    {
-        Console.Clear();
-        Console.WriteLine($"habit — {today:yyyy-MM-dd}");
-        Console.WriteLine();
-
-        if (habits.Count == 0)
-        {
-            Console.WriteLine("Пока нет привычек. Нажмите 'a', чтобы добавить.");
-            Console.WriteLine();
-            PrintHint();
-            return;
+            Console.Write(label);
+            var input = Console.ReadLine() ?? "";
+            Console.CursorVisible = false;
+            apply(input);
+            Console.Clear();
+            _prevLineCount = 0;
         }
 
-        var nameWidth = Math.Max(12, habits.Max(h => h.Name.Length) + 1);
-
-        Console.Write(new string(' ', nameWidth + 2));
-        for (var c = 0; c < Days; c++)
+        private void Render()
         {
-            var date = today.AddDays(c - (Days - 1));
-            Console.Write($" {date.Day,2}");
-        }
-        Console.WriteLine("   Стрик");
+            var today = DateOnly.FromDateTime(DateTime.Now);
+            var habits = _store.Data.Habits;
+            ClampSelection(habits);
 
-        for (var r = 0; r < habits.Count; r++)
-        {
-            var habit = habits[r];
-            var dates = Streak.ParsedDates(habit);
-
-            Console.Write(r == row ? "> " : "  ");
-            Console.Write(habit.Name.PadRight(nameWidth));
-
-            for (var c = 0; c < Days; c++)
+            var y = 0;
+            WriteLine(y++, () =>
             {
-                var date = today.AddDays(c - (Days - 1));
-                var done = dates.Contains(date);
-                var selected = r == row && c == col;
-
-                Console.Write(" ");
-                if (selected)
+                Console.Write($"habit — {today:yyyy-MM-dd}");
+                if (_moveMode)
                 {
-                    Console.BackgroundColor = ConsoleColor.DarkGray;
-                    Console.ForegroundColor = ConsoleColor.Black;
+                    if (_colorEnabled) Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.Write("  [ПЕРЕМЕЩЕНИЕ: ↑↓ двигают привычку]");
+                    Console.ResetColor();
                 }
-                else if (done)
+            });
+            WriteLine(y++, () => { });
+
+            if (habits.Count == 0)
+            {
+                WriteLine(y++, () => Console.Write("Пока нет привычек. Нажмите 'a', чтобы добавить."));
+                WriteLine(y++, () => { });
+            }
+            else
+            {
+                var nameWidth = Math.Max(12, habits.Max(h => h.Name.Length) + 1);
+
+                WriteLine(y++, () =>
                 {
-                    Console.ForegroundColor = ConsoleColor.Green;
+                    Console.Write(new string(' ', nameWidth + 2));
+                    for (var c = 0; c < _dayCount; c++)
+                        Console.Write($"{today.AddDays(c - (_dayCount - 1)).Day,3}");
+                    Console.Write("   Стрик");
+                });
+
+                for (var r = 0; r < habits.Count; r++)
+                {
+                    var habit = habits[r];
+                    var isSelectedRow = r == _row;
+                    var blinking = isSelectedRow && _moveMode && _blinkOn;
+
+                    WriteLine(y++, () =>
+                    {
+                        Console.Write(isSelectedRow ? "> " : "  ");
+
+                        if (blinking && _colorEnabled)
+                        {
+                            Console.BackgroundColor = ConsoleColor.DarkYellow;
+                            Console.ForegroundColor = ConsoleColor.Black;
+                        }
+                        Console.Write(!_colorEnabled && blinking
+                            ? ("*" + habit.Name).PadRight(nameWidth)
+                            : habit.Name.PadRight(nameWidth));
+                        Console.ResetColor();
+
+                        for (var c = 0; c < _dayCount; c++)
+                        {
+                            var date = today.AddDays(c - (_dayCount - 1));
+                            DrawCell(Streak.Status(habit, date), isSelectedRow && c == _col);
+                        }
+
+                        Console.Write($"   {Streak.Current(habit, today)}");
+                    });
                 }
 
-                Console.Write($" {(done ? "✓" : "·")}");
-                Console.ResetColor();
+                WriteLine(y++, () => { });
             }
 
-            Console.WriteLine($"   {Streak.Current(habit, today)}");
+            WriteLine(y++, () =>
+            {
+                if (_colorEnabled) Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.Write("↑↓ привычка  ←→ день  Enter отметить  e очистить  m двигать  t цвет  d кол-во дней  a добавить  Delete удалить  q выход");
+                Console.ResetColor();
+            });
+
+            for (var extra = y; extra < _prevLineCount; extra++)
+                ClearLine(extra);
+
+            _prevLineCount = y;
         }
 
-        Console.WriteLine();
-        PrintHint();
-    }
+        private void DrawCell(DayStatus status, bool selected)
+        {
+            var glyph = status switch
+            {
+                DayStatus.Done => "✓",
+                DayStatus.Failed => "✗",
+                _ => "·",
+            };
 
-    private static void PrintHint()
-    {
-        Console.ForegroundColor = ConsoleColor.DarkGray;
-        Console.WriteLine("↑↓ выбрать привычку  ←→ выбрать день  Enter отметить  a добавить  d удалить  q выход");
-        Console.ResetColor();
+            if (!_colorEnabled)
+            {
+                Console.Write(selected ? $"[{glyph}]" : $" {glyph} ");
+                return;
+            }
+
+            if (selected)
+            {
+                Console.BackgroundColor = ConsoleColor.DarkGray;
+                Console.ForegroundColor = ConsoleColor.Black;
+            }
+            else if (status == DayStatus.Done)
+            {
+                Console.ForegroundColor = ConsoleColor.Green;
+            }
+            else if (status == DayStatus.Failed)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+            }
+
+            Console.Write($" {glyph} ");
+            Console.ResetColor();
+        }
+
+        private static void WriteLine(int row, Action content)
+        {
+            Console.SetCursorPosition(0, row);
+            content();
+            Console.Write("\x1b[K");
+        }
+
+        private static void ClearLine(int row)
+        {
+            Console.SetCursorPosition(0, row);
+            Console.Write("\x1b[K");
+        }
     }
 }

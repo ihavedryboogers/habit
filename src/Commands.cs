@@ -22,33 +22,27 @@ public static class Commands
     public static void Done(Store store, DateOnly today, string name, DateOnly date)
     {
         var habit = FindOrThrow(store, name);
-        var dateStr = date.ToString("yyyy-MM-dd");
-
-        if (!habit.Dates.Contains(dateStr))
-        {
-            habit.Dates.Add(dateStr);
-            habit.Dates.Sort(StringComparer.Ordinal);
-            store.Save();
-        }
+        Streak.SetStatus(habit, date, DayStatus.Done);
+        store.Save();
 
         var streak = Streak.Current(habit, today);
-        Console.WriteLine($"✓ {habit.Name} — {dateStr} (стрик: {streak})");
+        Console.WriteLine($"✓ {habit.Name} — {date:yyyy-MM-dd} (стрик: {streak})");
+    }
+
+    public static void Fail(Store store, string name, DateOnly date)
+    {
+        var habit = FindOrThrow(store, name);
+        Streak.SetStatus(habit, date, DayStatus.Failed);
+        store.Save();
+        Console.WriteLine($"✗ {habit.Name} — {date:yyyy-MM-dd}");
     }
 
     public static void Undone(Store store, string name, DateOnly date)
     {
         var habit = FindOrThrow(store, name);
-        var dateStr = date.ToString("yyyy-MM-dd");
-
-        if (habit.Dates.Remove(dateStr))
-        {
-            store.Save();
-            Console.WriteLine($"Отметка снята: {habit.Name} — {dateStr}");
-        }
-        else
-        {
-            Console.WriteLine($"Отметки на {dateStr} и не было.");
-        }
+        Streak.SetStatus(habit, date, DayStatus.Empty);
+        store.Save();
+        Console.WriteLine($"Отметка снята: {habit.Name} — {date:yyyy-MM-dd}");
     }
 
     public static void Remove(Store store, string name)
@@ -67,14 +61,16 @@ public static class Commands
             return;
         }
 
-        var todayStr = today.ToString("yyyy-MM-dd");
         foreach (var habit in store.Data.Habits)
         {
-            var done = habit.Dates.Contains(todayStr);
-            var mark = done ? "✓" : "·";
+            var mark = Streak.Status(habit, today) switch
+            {
+                DayStatus.Done => "✓",
+                DayStatus.Failed => "✗",
+                _ => "·",
+            };
             var streak = Streak.Current(habit, today);
-            var streakText = streak > 0 ? $"стрик: {streak}" : "стрик: 0";
-            Console.WriteLine($"{mark} {habit.Name,-24} {streakText}");
+            Console.WriteLine($"{mark} {habit.Name,-24} стрик: {streak}");
         }
     }
 
@@ -87,7 +83,8 @@ public static class Commands
           habit                     интерактивная таблица (стрелки + Enter)
           habit add <название>      добавить привычку
           habit done <название> [дата]     отметить выполненной (по умолчанию — сегодня)
-          habit undone <название> [дата]   снять отметку
+          habit fail <название> [дата]     отметить осознанно пропущенной
+          habit undone <название> [дата]   снять отметку (сделать пустой)
           habit remove <название>   удалить привычку
           habit list                показать список привычек
           habit help                эта справка

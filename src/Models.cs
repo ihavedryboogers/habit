@@ -6,7 +6,9 @@ public sealed class HabitEntry
 {
     public string Name { get; set; } = "";
     public string CreatedAt { get; set; } = "";
-    public List<string> Dates { get; set; } = new();
+
+    // date (yyyy-MM-dd) -> "done" | "failed"; absent key means empty/unmarked
+    public Dictionary<string, string> Marks { get; set; } = new();
 }
 
 public sealed class HabitData
