@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace Habit;
 
 public static class Interactive
@@ -11,9 +13,16 @@ public static class Interactive
         private const int MinDays = 1;
         private const int MaxDays = 60;
 
+        private static readonly string[] MonthAbbr =
+        {
+            "янв", "фев", "мар", "апр", "май", "июн",
+            "июл", "авг", "сен", "окт", "ноя", "дек",
+        };
+
         private readonly Store _store;
         private int _row;
         private int _col;
+        private DateOnly _windowStart;
         private int _dayCount = 7;
         private bool _colorEnabled = true;
         private bool _moveMode;
@@ -26,6 +35,7 @@ public static class Interactive
         {
             Console.Clear();
             Console.CursorVisible = false;
+            CenterOnToday();
             try
             {
                 Render();
@@ -52,27 +62,28 @@ public static class Interactive
             }
         }
 
-        private static ConsoleKey? WaitForKey(int? timeoutMs)
+        private static ConsoleKeyInfo? WaitForKey(int? timeoutMs)
         {
             if (timeoutMs is null)
-                return Console.ReadKey(intercept: true).Key;
+                return Console.ReadKey(intercept: true);
 
             var deadline = Environment.TickCount64 + timeoutMs.Value;
             while (Environment.TickCount64 < deadline)
             {
                 if (Console.KeyAvailable)
-                    return Console.ReadKey(intercept: true).Key;
+                    return Console.ReadKey(intercept: true);
                 Thread.Sleep(20);
             }
             return null;
         }
 
-        private bool Handle(ConsoleKey key)
+        private bool Handle(ConsoleKeyInfo info)
         {
             var habits = _store.Data.Habits;
             ClampSelection(habits);
+            var shift = info.Modifiers.HasFlag(ConsoleModifiers.Shift);
 
-            switch (key)
+            switch (info.Key)
             {
                 case ConsoleKey.UpArrow:
                     if (_moveMode) MoveHabit(-1);
@@ -85,11 +96,15 @@ public static class Interactive
                     break;
 
                 case ConsoleKey.LeftArrow:
-                    _col = Math.Max(0, _col - 1);
+                    MoveFocus(shift ? -7 : -1);
                     break;
 
                 case ConsoleKey.RightArrow:
-                    _col = Math.Min(_dayCount - 1, _col + 1);
+                    MoveFocus(shift ? 7 : 1);
+                    break;
+
+                case ConsoleKey.Home:
+                    CenterOnToday();
                     break;
 
                 case ConsoleKey.Enter:
@@ -129,13 +144,33 @@ public static class Interactive
             return true;
         }
 
-        private DateOnly ColumnDate(DateOnly today) => today.AddDays(_col - (_dayCount - 1));
+        private DateOnly FocusDate => _windowStart.AddDays(_col);
+
+        private void CenterOnToday()
+        {
+            var today = DateOnly.FromDateTime(DateTime.Now);
+            var leftDays = _dayCount / 2;
+            _windowStart = today.AddDays(-leftDays);
+            _col = leftDays;
+        }
+
+        private void MoveFocus(int deltaDays)
+        {
+            var newDate = FocusDate.AddDays(deltaDays);
+            var windowEnd = _windowStart.AddDays(_dayCount - 1);
+
+            if (newDate.DayNumber < _windowStart.DayNumber)
+                _windowStart = newDate;
+            else if (newDate.DayNumber > windowEnd.DayNumber)
+                _windowStart = newDate.AddDays(-(_dayCount - 1));
+
+            _col = newDate.DayNumber - _windowStart.DayNumber;
+        }
 
         private void ToggleSelected()
         {
-            var today = DateOnly.FromDateTime(DateTime.Now);
             var habit = _store.Data.Habits[_row];
-            var date = ColumnDate(today);
+            var date = FocusDate;
             var next = Streak.Status(habit, date) == DayStatus.Done ? DayStatus.Failed : DayStatus.Done;
             Streak.SetStatus(habit, date, next);
             _store.Save();
@@ -143,8 +178,7 @@ public static class Interactive
 
         private void SetSelected(DayStatus status)
         {
-            var today = DateOnly.FromDateTime(DateTime.Now);
-            Streak.SetStatus(_store.Data.Habits[_row], ColumnDate(today), status);
+            Streak.SetStatus(_store.Data.Habits[_row], FocusDate, status);
             _store.Save();
         }
 
@@ -190,6 +224,7 @@ public static class Interactive
                 });
                 _store.Save();
                 _row = _store.Data.Habits.Count - 1;
+                CenterOnToday();
             });
         }
 
@@ -245,11 +280,18 @@ public static class Interactive
             {
                 var nameWidth = Math.Max(12, habits.Max(h => h.Name.Length) + 1);
 
+                WriteLine(y++, () => WriteMonthsLine(nameWidth));
+
                 WriteLine(y++, () =>
                 {
                     Console.Write(new string(' ', nameWidth + 2));
                     for (var c = 0; c < _dayCount; c++)
-                        Console.Write($"{today.AddDays(c - (_dayCount - 1)).Day,3}");
+                    {
+                        var date = _windowStart.AddDays(c);
+                        if (_colorEnabled && date == today) Console.ForegroundColor = ConsoleColor.Cyan;
+                        Console.Write($"{date.Day,3}");
+                        Console.ResetColor();
+                    }
                     Console.Write("   Стрик");
                 });
 
@@ -275,7 +317,7 @@ public static class Interactive
 
                         for (var c = 0; c < _dayCount; c++)
                         {
-                            var date = today.AddDays(c - (_dayCount - 1));
+                            var date = _windowStart.AddDays(c);
                             DrawCell(Streak.Status(habit, date), isSelectedRow && c == _col);
                         }
 
@@ -289,7 +331,13 @@ public static class Interactive
             WriteLine(y++, () =>
             {
                 if (_colorEnabled) Console.ForegroundColor = ConsoleColor.DarkGray;
-                Console.Write("↑↓ привычка  ←→ день  Enter отметить  e очистить  m двигать  t цвет  d кол-во дней  a добавить  Delete удалить  q выход");
+                Console.Write("↑↓ привычка  ←→/⇧←→ день  Home сегодня  Enter отметить  e очистить  m двигать");
+                Console.ResetColor();
+            });
+            WriteLine(y++, () =>
+            {
+                if (_colorEnabled) Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.Write("t цвет  d кол-во дней  a добавить  Delete удалить  q выход");
                 Console.ResetColor();
             });
 
@@ -297,6 +345,18 @@ public static class Interactive
                 ClearLine(extra);
 
             _prevLineCount = y;
+        }
+
+        private void WriteMonthsLine(int nameWidth)
+        {
+            var sb = new StringBuilder();
+            sb.Append(' ', nameWidth + 2);
+            for (var c = 0; c < _dayCount; c++)
+            {
+                var date = _windowStart.AddDays(c);
+                sb.Append(c == 0 || date.Day == 1 ? MonthAbbr[date.Month - 1] : "   ");
+            }
+            Console.Write(sb.ToString());
         }
 
         private void DrawCell(DayStatus status, bool selected)
