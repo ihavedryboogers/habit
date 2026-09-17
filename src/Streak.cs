@@ -9,10 +9,17 @@ public enum DayStatus
 
 public static class Streak
 {
-    public static DayStatus Status(HabitEntry habit, DateOnly date)
+    public static DayStatus Status(HabitEntry habit, DateOnly date, DateOnly today)
     {
         if (habit.Marks.TryGetValue(date.ToString("yyyy-MM-dd"), out var value))
             return value == "failed" ? DayStatus.Failed : DayStatus.Done;
+
+        if (date.DayNumber < today.DayNumber &&
+            DateOnly.TryParse(habit.CreatedAt, out var created) &&
+            date.DayNumber >= created.DayNumber)
+        {
+            return DayStatus.Failed;
+        }
 
         return DayStatus.Empty;
     }
@@ -29,11 +36,11 @@ public static class Streak
     public static int Current(HabitEntry habit, DateOnly today)
     {
         var cursor = today;
-        if (Status(habit, cursor) != DayStatus.Done)
+        if (Status(habit, cursor, today) != DayStatus.Done)
             cursor = cursor.AddDays(-1);
 
         var streak = 0;
-        while (Status(habit, cursor) == DayStatus.Done)
+        while (Status(habit, cursor, today) == DayStatus.Done)
         {
             streak++;
             cursor = cursor.AddDays(-1);

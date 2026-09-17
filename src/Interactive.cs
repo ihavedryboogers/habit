@@ -215,7 +215,8 @@ public static class Interactive
         {
             var habit = _store.Data.Habits[_row];
             var date = FocusDate;
-            var next = Streak.Status(habit, date) == DayStatus.Done ? DayStatus.Failed : DayStatus.Done;
+            var today = DateOnly.FromDateTime(DateTime.Now);
+            var next = Streak.Status(habit, date, today) == DayStatus.Done ? DayStatus.Failed : DayStatus.Done;
             Streak.SetStatus(habit, date, next);
             _store.Save();
         }
@@ -415,17 +416,6 @@ public static class Interactive
             ClampSelection(habits);
 
             var y = 0;
-            WriteLine(y++, () =>
-            {
-                Console.Write($"habit — {today:yyyy-MM-dd}");
-                if (_moveMode)
-                {
-                    if (_colorEnabled) Console.ForegroundColor = ConsoleColor.Yellow;
-                    Console.Write("  [ПЕРЕМЕЩЕНИЕ: ↑↓ двигают привычку]");
-                    Console.ResetColor();
-                }
-            });
-            WriteLine(y++, () => { });
 
             if (habits.Count == 0)
             {
@@ -473,7 +463,7 @@ public static class Interactive
                         for (var c = 0; c < _dayCount; c++)
                         {
                             var date = _windowStart.AddDays(c);
-                            DrawCell(Streak.Status(habit, date), isSelectedRow && c == _col);
+                            DrawCell(Streak.Status(habit, date, today), isSelectedRow && c == _col);
                         }
 
                         var badge = MotivationBadge(Streak.Current(habit, today));

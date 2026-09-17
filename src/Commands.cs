@@ -63,7 +63,7 @@ public static class Commands
 
         foreach (var habit in store.Data.Habits)
         {
-            var mark = Streak.Status(habit, today) switch
+            var mark = Streak.Status(habit, today, today) switch
             {
                 DayStatus.Done => "✓",
                 DayStatus.Failed => "✗",
