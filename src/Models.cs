@@ -14,6 +14,7 @@ public sealed class HabitEntry
 public sealed class HabitData
 {
     public List<HabitEntry> Habits { get; set; } = new();
+    public List<string> Quotes { get; set; } = new();
 }
 
 [JsonSerializable(typeof(HabitData))]

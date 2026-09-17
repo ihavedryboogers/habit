@@ -12,6 +12,7 @@ public static class Interactive
     {
         private const int MinDays = 1;
         private const int MaxDays = 60;
+        private const int MilestoneUnit = 7;
 
         private static readonly string[] MonthAbbr =
         {
@@ -19,7 +20,29 @@ public static class Interactive
             "июл", "авг", "сен", "окт", "ноя", "дек",
         };
 
+        private static readonly string[] DefaultQuotes =
+        {
+            "Маленькие шаги — большие результаты.",
+            "Сегодня лучше, чем вчера.",
+            "Не пропускай два дня подряд.",
+            "Дисциплина — это свобода.",
+            "Прогресс, а не совершенство.",
+            "Ты уже начал — не останавливайся.",
+            "Каждый день — новый шанс.",
+            "Привычки создают тебя.",
+            "Постоянство побеждает мотивацию.",
+            "Один день за раз.",
+            "Ты сильнее своих отговорок.",
+            "Действие рождает мотивацию, а не наоборот.",
+            "Будь тем, кем гордится будущий ты.",
+        };
+
+        private const string LegendText =
+            "↑↓ привычка · ←→/⇧ день · Home сегодня · Enter/e отметка · m двигать · " +
+            "t цвет · d дни · a добавить · Delete удалить · s настройки · q выход";
+
         private readonly Store _store;
+        private readonly Random _random = new();
         private int _row;
         private int _col;
         private DateOnly _windowStart;
@@ -27,6 +50,9 @@ public static class Interactive
         private bool _colorEnabled = true;
         private bool _moveMode;
         private bool _blinkOn;
+        private bool _showLegend;
+        private int _legendRevealLength;
+        private string _quote = "";
         private int _prevLineCount;
 
         public Session(Store store) => _store = store;
@@ -35,7 +61,8 @@ public static class Interactive
         {
             Console.Clear();
             Console.CursorVisible = false;
-            CenterOnToday();
+            ResetToToday();
+            PickQuote();
             try
             {
                 Render();
@@ -104,7 +131,7 @@ public static class Interactive
                     break;
 
                 case ConsoleKey.Home:
-                    CenterOnToday();
+                    ResetToToday();
                     break;
 
                 case ConsoleKey.Enter:
@@ -136,6 +163,14 @@ public static class Interactive
                     if (habits.Count > 0) PromptRemoveHabit(habits[_row]);
                     break;
 
+                case ConsoleKey.S:
+                    RunSettingsMenu();
+                    break;
+
+                case ConsoleKey.H:
+                    ToggleLegend();
+                    break;
+
                 case ConsoleKey.Q:
                 case ConsoleKey.Escape:
                     return false;
@@ -146,19 +181,28 @@ public static class Interactive
 
         private DateOnly FocusDate => _windowStart.AddDays(_col);
 
-        private void CenterOnToday()
+        private void ResetToToday()
         {
             var today = DateOnly.FromDateTime(DateTime.Now);
-            var leftDays = _dayCount / 2;
-            _windowStart = today.AddDays(-leftDays);
-            _col = leftDays;
+            _windowStart = today.AddDays(-(_dayCount - 1));
+            _col = _dayCount - 1;
+        }
+
+        private void ClampWindowToToday()
+        {
+            var today = DateOnly.FromDateTime(DateTime.Now);
+            if (_windowStart.AddDays(_dayCount - 1).DayNumber > today.DayNumber)
+                _windowStart = today.AddDays(-(_dayCount - 1));
         }
 
         private void MoveFocus(int deltaDays)
         {
+            var today = DateOnly.FromDateTime(DateTime.Now);
             var newDate = FocusDate.AddDays(deltaDays);
-            var windowEnd = _windowStart.AddDays(_dayCount - 1);
+            if (newDate.DayNumber > today.DayNumber)
+                newDate = today;
 
+            var windowEnd = _windowStart.AddDays(_dayCount - 1);
             if (newDate.DayNumber < _windowStart.DayNumber)
                 _windowStart = newDate;
             else if (newDate.DayNumber > windowEnd.DayNumber)
@@ -200,12 +244,52 @@ public static class Interactive
             _col = Math.Clamp(_col, 0, _dayCount - 1);
         }
 
+        private void ToggleLegend()
+        {
+            if (_showLegend)
+            {
+                _showLegend = false;
+                _legendRevealLength = 0;
+                return;
+            }
+
+            _showLegend = true;
+            for (var len = 3; len < LegendText.Length; len += 3)
+            {
+                _legendRevealLength = len;
+                Render();
+                Thread.Sleep(12);
+            }
+            _legendRevealLength = LegendText.Length;
+        }
+
+        private void PickQuote()
+        {
+            var pool = DefaultQuotes.Concat(_store.Data.Quotes).ToList();
+            _quote = pool[_random.Next(pool.Count)];
+        }
+
+        private static string MotivationBadge(int streak) => streak switch
+        {
+            >= 12 * MilestoneUnit => "👑",
+            >= 8 * MilestoneUnit => "🚀🚀",
+            >= 4 * MilestoneUnit => "🚀",
+            >= 3 * MilestoneUnit => "🔥🔥🔥",
+            >= 2 * MilestoneUnit => "🔥🔥",
+            >= MilestoneUnit => "🔥",
+            >= 1 => "🌱",
+            _ => "",
+        };
+
         private void PromptDayCount()
         {
             RunPrompt($"Сколько дней показывать ({MinDays}-{MaxDays}): ", input =>
             {
                 if (int.TryParse(input, out var value))
+                {
                     _dayCount = Math.Clamp(value, MinDays, MaxDays);
+                    ClampWindowToToday();
+                }
             });
         }
 
@@ -224,7 +308,7 @@ public static class Interactive
                 });
                 _store.Save();
                 _row = _store.Data.Habits.Count - 1;
-                CenterOnToday();
+                ResetToToday();
             });
         }
 
@@ -240,6 +324,19 @@ public static class Interactive
             });
         }
 
+        private void PromptAddQuote()
+        {
+            RunPrompt("Своя мотивирующая фраза: ", input =>
+            {
+                var phrase = input.Trim();
+                if (string.IsNullOrWhiteSpace(phrase))
+                    return;
+
+                _store.Data.Quotes.Add(phrase);
+                _store.Save();
+            });
+        }
+
         private void RunPrompt(string label, Action<string> apply)
         {
             Console.CursorVisible = true;
@@ -250,6 +347,65 @@ public static class Interactive
             apply(input);
             Console.Clear();
             _prevLineCount = 0;
+        }
+
+        private void RunSettingsMenu()
+        {
+            var index = 0;
+            Console.Clear();
+            while (true)
+            {
+                var items = new[]
+                {
+                    $"Цвет: {(_colorEnabled ? "включён" : "выключен")}",
+                    $"Дней показывать: {_dayCount}",
+                    "Добавить свою мотивирующую фразу",
+                };
+
+                Console.SetCursorPosition(0, 0);
+                Console.Write("Настройки"); Console.Write("\x1b[K");
+                Console.SetCursorPosition(0, 1);
+                Console.Write("\x1b[K");
+
+                for (var i = 0; i < items.Length; i++)
+                {
+                    Console.SetCursorPosition(0, 2 + i);
+                    Console.Write(i == index ? "> " : "  ");
+                    Console.Write(items[i]);
+                    Console.Write("\x1b[K");
+                }
+
+                Console.SetCursorPosition(0, 2 + items.Length);
+                Console.Write("\x1b[K");
+                Console.SetCursorPosition(0, 3 + items.Length);
+                Console.Write("↑↓ выбрать  Enter изменить  s/Esc назад");
+                Console.Write("\x1b[K");
+
+                var key = Console.ReadKey(intercept: true).Key;
+                switch (key)
+                {
+                    case ConsoleKey.UpArrow:
+                        index = Math.Max(0, index - 1);
+                        break;
+
+                    case ConsoleKey.DownArrow:
+                        index = Math.Min(items.Length - 1, index + 1);
+                        break;
+
+                    case ConsoleKey.Enter:
+                        if (index == 0) _colorEnabled = !_colorEnabled;
+                        else if (index == 1) PromptDayCount();
+                        else if (index == 2) PromptAddQuote();
+                        Console.Clear();
+                        break;
+
+                    case ConsoleKey.S:
+                    case ConsoleKey.Escape:
+                        Console.Clear();
+                        _prevLineCount = 0;
+                        return;
+                }
+            }
         }
 
         private void Render()
@@ -292,7 +448,6 @@ public static class Interactive
                         Console.Write($"{date.Day,3}");
                         Console.ResetColor();
                     }
-                    Console.Write("   Стрик");
                 });
 
                 for (var r = 0; r < habits.Count; r++)
@@ -321,7 +476,9 @@ public static class Interactive
                             DrawCell(Streak.Status(habit, date), isSelectedRow && c == _col);
                         }
 
-                        Console.Write($"   {Streak.Current(habit, today)}");
+                        var badge = MotivationBadge(Streak.Current(habit, today));
+                        if (badge.Length > 0)
+                            Console.Write("  " + badge);
                     });
                 }
 
@@ -331,13 +488,8 @@ public static class Interactive
             WriteLine(y++, () =>
             {
                 if (_colorEnabled) Console.ForegroundColor = ConsoleColor.DarkGray;
-                Console.Write("↑↓ привычка  ←→/⇧←→ день  Home сегодня  Enter отметить  e очистить  m двигать");
-                Console.ResetColor();
-            });
-            WriteLine(y++, () =>
-            {
-                if (_colorEnabled) Console.ForegroundColor = ConsoleColor.DarkGray;
-                Console.Write("t цвет  d кол-во дней  a добавить  Delete удалить  q выход");
+                Console.Write(_showLegend ? LegendText[..Math.Min(_legendRevealLength, LegendText.Length)] : _quote);
+                Console.Write("  (h — подсказки)");
                 Console.ResetColor();
             });
 
